@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "922028435237",
+    "project_id": "balltrackr",
+    "storage_bucket": "balltrackr.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:922028435237:android:9da3cac098488696025ccc",
+        "android_client_info": {
+          "package_name": "com.balltrackr"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDWd5Ky_u0o53ipx13wYSmVrFOC2Lbl9dw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
