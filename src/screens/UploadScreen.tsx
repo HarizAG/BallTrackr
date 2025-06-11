@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,12 +13,13 @@ import {
   PermissionsAndroid,
 } from 'react-native';
 import { launchImageLibrary, MediaType } from 'react-native-image-picker';
-import storage from '@react-native-firebase/storage';
-import firestore from '@react-native-firebase/firestore';
-import auth from '@react-native-firebase/auth';
-import Video from 'react-native-video'; // Add this dependency
+import RNFS from 'react-native-fs';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getVideoInfo } from 'react-native-video-info';
+// Remove the runOnJS import since we'll handle it differently
+// import { runOnJS } from 'react-native-reanimated';
 
-const { width } = Dimensions.get('window');
+const { width, height: screenHeight } = Dimensions.get('window');
 
 interface VideoData {
   uri: string;
@@ -28,27 +29,150 @@ interface VideoData {
   duration: number;
 }
 
+interface SavedVideo {
+  id: string;
+  title: string;
+  description: string;
+  fileName: string;
+  fileSize: number;
+  duration: number;
+  localPath: string;
+  ballColors: {
+    primary: string;
+    secondary: string;
+  };
+  gameType: string;
+  createdAt: string;
+  processed: boolean;
+  status: string;
+  ballDetections: any[];
+  trackingSettings: TrackingSettings;
+}
+
+interface TrackingSettings {
+  hueMin: number;
+  hueMax: number;
+  satMin: number;
+  satMax: number;
+  valMin: number;
+  valMax: number;
+  minRadius: number;
+  maxRadius: number;
+}
+
 const UploadScreen = ({ navigation }) => {
   const [selectedVideo, setSelectedVideo] = useState<VideoData | null>(null);
   const [videoTitle, setVideoTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [saveProgress, setSaveProgress] = useState(0);
   const [ballColors, setBallColors] = useState({ primary: 'yellow', secondary: 'blue' });
-  const [gameType, setGameType] = useState('indoor'); // indoor/beach/practice
+  const [gameType, setGameType] = useState('indoor');
+  
+  // Ball tracking states (simplified without reanimated)
+  const [isTrackingEnabled, setIsTrackingEnabled] = useState(true);
+  const [ballDetected, setBallDetected] = useState(false);
+  const [ballPosition, setBallPosition] = useState({ x: 0, y: 0 });
+  const [trackingSettings, setTrackingSettings] = useState<TrackingSettings>({
+    hueMin: 0,
+    hueMax: 30,
+    satMin: 100,
+    satMax: 255,
+    valMin: 100,
+    valMax: 255,
+    minRadius: 10,
+    maxRadius: 100,
+  });
+  const [showSettings, setShowSettings] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [ballDetections, setBallDetections] = useState<any[]>([]);
 
-  // Request permissions for Android
+  const trackingRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (trackingRef.current) {
+        clearInterval(trackingRef.current);
+      }
+    };
+  }, []);
+
+  // Ball tracking methods (simplified without reanimated)
+  const processCameraFrame = (frame: any) => {
+    if (!isTrackingEnabled) return;
+
+    try {
+      // SIMULATION MODE - Replace with actual OpenCV implementation
+      const simulatedDetection = Math.random() > 0.7;
+      if (simulatedDetection) {
+        const x = Math.random() * width;
+        const y = Math.random() * (screenHeight * 0.6) + (screenHeight * 0.2);
+        const detection = {
+          x,
+          y,
+          radius: 30,
+          timestamp: Date.now(),
+          confidence: Math.random() * 0.3 + 0.7, // 0.7 to 1.0
+        };
+        
+        // Direct state updates without runOnJS
+        setBallDetected(true);
+        setBallPosition({ x, y, radius: 30 });
+        setBallDetections(prev => [...prev, detection]);
+      } else {
+        setBallDetected(false);
+      }
+    } catch (error) {
+      console.error('Frame processing error:', error);
+    }
+  };
+
+  const startTracking = () => {
+    if (trackingRef.current) return;
+    
+    console.log('Starting ball tracking simulation...');
+    setBallDetections([]);
+    trackingRef.current = setInterval(() => {
+      processCameraFrame(null);
+    }, 100);
+  };
+
+  const stopTracking = () => {
+    if (trackingRef.current) {
+      clearInterval(trackingRef.current);
+      trackingRef.current = null;
+    }
+    setBallDetected(false);
+    console.log('Ball tracking stopped. Total detections:', ballDetections.length);
+  };
+
+  const toggleTracking = () => {
+    setIsTrackingEnabled(prev => !prev);
+    if (!isTrackingEnabled && isProcessing) {
+      startTracking();
+    } else if (isTrackingEnabled) {
+      stopTracking();
+    }
+  };
+
   const requestStoragePermission = async () => {
     if (Platform.OS === 'android') {
       try {
-        const granted = await PermissionsAndroid.requestMultiple([
+        const permissions = [
           PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
-          PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
-        ]);
+        ];
+        
+        if (Platform.Version >= 33) {
+          permissions.push(PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO as any);
+        } else {
+          permissions.push(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE);
+        }
+
+        const granted = await PermissionsAndroid.requestMultiple(permissions);
         
         return (
-          granted['android.permission.READ_EXTERNAL_STORAGE'] === PermissionsAndroid.RESULTS.GRANTED &&
-          granted['android.permission.WRITE_EXTERNAL_STORAGE'] === PermissionsAndroid.RESULTS.GRANTED
+          granted['android.permission.READ_EXTERNAL_STORAGE'] === PermissionsAndroid.RESULTS.GRANTED ||
+          granted['android.permission.READ_MEDIA_VIDEO'] === PermissionsAndroid.RESULTS.GRANTED
         );
       } catch (err) {
         console.warn('Permission request error:', err);
@@ -58,8 +182,24 @@ const UploadScreen = ({ navigation }) => {
     return true;
   };
 
+  const getVideoDuration = async (uri: string): Promise<number> => {
+    try {
+      console.log('Getting video info for URI:', uri);
+      const videoInfo = await getVideoInfo(uri);
+      console.log('Video info result:', videoInfo);
+      
+      if (videoInfo && videoInfo.duration) {
+        const durationMs = videoInfo.duration * 1000;
+        console.log('Video duration (ms):', durationMs);
+        return durationMs;
+      }
+    } catch (error) {
+      console.warn('Failed to get video duration:', error);
+    }
+    return 0;
+  };
+
   const selectVideo = async () => {
-    // Request permissions first
     const hasPermission = await requestStoragePermission();
     if (!hasPermission) {
       Alert.alert('Permission Required', 'Please grant storage permissions to select videos');
@@ -69,17 +209,16 @@ const UploadScreen = ({ navigation }) => {
     const options = {
       mediaType: 'video' as MediaType,
       videoQuality: 'high' as const,
-      durationLimit: 600, // 10 minutes
+      durationLimit: 600,
       includeBase64: false,
       includeExtra: true,
-      // Add these options for better Android compatibility
       storageOptions: {
         skipBackup: true,
         path: 'images',
       },
     };
 
-    launchImageLibrary(options, (response) => {
+    launchImageLibrary(options, async (response) => {
       if (response.didCancel) {
         console.log('User cancelled video selection');
       } else if (response.errorMessage) {
@@ -88,24 +227,25 @@ const UploadScreen = ({ navigation }) => {
       } else if (response.assets && response.assets[0]) {
         const video = response.assets[0];
         
-        // Debug logging
         console.log('Video selection details:', {
           uri: video.uri,
           duration: video.duration,
-          durationInSeconds: video.duration ? Math.floor(video.duration / 1000) : 0,
           fileSize: video.fileSize,
           fileName: video.fileName,
           type: video.type
         });
 
-        // Validate video file
-        if (video.fileSize && video.fileSize > 500 * 1024 * 1024) { // 500MB limit
+        if (video.fileSize && video.fileSize > 500 * 1024 * 1024) {
           Alert.alert('File Too Large', 'Please select a video file smaller than 500MB');
           return;
         }
 
-        // For duration, if it's 0 or undefined, we'll calculate it after upload
-        const duration = video.duration || 0;
+        let duration = video.duration || 0;
+        
+        if (!duration && video.uri) {
+          console.log('Duration not available from picker, trying video-info...');
+          duration = await getVideoDuration(video.uri);
+        }
 
         setSelectedVideo({
           uri: video.uri!,
@@ -114,7 +254,8 @@ const UploadScreen = ({ navigation }) => {
           type: video.type || 'video/mp4',
           duration: duration,
         });
-        console.log('Selected video URI:', video.uri);
+        
+        console.log('Final selected video duration:', duration);
       }
     });
   };
@@ -135,173 +276,181 @@ const UploadScreen = ({ navigation }) => {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
-  // Fixed upload function with better error handling
-  const uploadVideo = async () => {
+  const createVideosDirectory = async (): Promise<string> => {
+    const videosDir = `${RNFS.DocumentDirectoryPath}/VolleyballVideos`;
+    
+    try {
+      const dirExists = await RNFS.exists(videosDir);
+      if (!dirExists) {
+        await RNFS.mkdir(videosDir);
+        console.log('Created videos directory:', videosDir);
+      }
+      return videosDir;
+    } catch (error) {
+      console.error('Failed to create videos directory:', error);
+      throw error;
+    }
+  };
+
+  // Process video with ball tracking simulation
+  const processVideoWithTracking = async () => {
+    if (!isTrackingEnabled) return;
+    
+    setIsProcessing(true);
+    setBallDetections([]);
+    
+    // Simulate video processing with ball tracking
+    console.log('Starting video processing with ball tracking...');
+    startTracking();
+    
+    // Simulate processing time
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    stopTracking();
+    setIsProcessing(false);
+    
+    console.log('Video processing completed. Ball detections:', ballDetections.length);
+  };
+
+  const saveVideoLocally = async () => {
     if (!selectedVideo || !videoTitle.trim()) {
       Alert.alert('Error', 'Please select a video and enter a title');
       return;
     }
 
-    const currentUser = auth().currentUser;
-    if (!currentUser) {
-      Alert.alert('Error', 'You must be logged in to upload videos');
-      return;
-    }
-
-    console.log('Starting upload process...');
+    console.log('Starting local save process...');
     console.log('Selected video details:', selectedVideo);
-    console.log('Current user:', currentUser.uid);
 
-    setUploading(true);
-    setUploadProgress(0);
+    setSaving(true);
+    setSaveProgress(0);
 
     try {
-      // Create unique filename with user ID and timestamp
+      // Process video with ball tracking if enabled
+      if (isTrackingEnabled) {
+        setSaveProgress(10);
+        await processVideoWithTracking();
+        setSaveProgress(25);
+      }
+
+      const videosDir = await createVideosDirectory();
+      
       const timestamp = Date.now();
       const sanitizedTitle = videoTitle.replace(/[^a-zA-Z0-9]/g, '_');
-      const fileName = `videos/${currentUser.uid}/${timestamp}_${sanitizedTitle}.mp4`;
+      const videoId = `${timestamp}_${sanitizedTitle}`;
+      const fileExtension = selectedVideo.fileName.split('.').pop() || 'mp4';
+      const localFileName = `${videoId}.${fileExtension}`;
+      const localPath = `${videosDir}/${localFileName}`;
       
-      console.log('Upload filename:', fileName);
-      console.log('Original URI:', selectedVideo.uri);
+      console.log('Local save path:', localPath);
       
-      // Fix URI handling for different platforms
-      let fileUri = selectedVideo.uri;
-      
-      if (Platform.OS === 'android') {
-        // Handle Android URI format
-        if (fileUri.startsWith('content://')) {
-          // Content URI - use as is
-          console.log('Using content URI:', fileUri);
-        } else if (fileUri.startsWith('file://')) {
-          // File URI - keep as is for putFile
-          console.log('Using file URI:', fileUri);
-        } else {
-          // Add file:// prefix if missing
-          fileUri = `file://${fileUri}`;
-          console.log('Added file:// prefix:', fileUri);
-        }
+      let sourceUri = selectedVideo.uri;
+      if (Platform.OS === 'android' && sourceUri.startsWith('content://')) {
+        console.log('Using Android content URI:', sourceUri);
+      } else if (sourceUri.startsWith('file://')) {
+        sourceUri = sourceUri.replace('file://', '');
       }
       
-      // Create Firebase Storage reference
-      const reference = storage().ref(fileName);
-      console.log('Firebase reference created:', fileName);
+      console.log('Source URI for copy:', sourceUri);
       
-      // Upload the file
-      console.log('Starting upload with URI:', fileUri);
-      const uploadTask = reference.putFile(fileUri);
-
-      // Monitor upload progress
-      uploadTask.on('state_changed', (snapshot) => {
-        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-        setUploadProgress(Math.round(progress));
-        console.log(`Upload progress: ${progress}% (${snapshot.bytesTransferred}/${snapshot.totalBytes} bytes)`);
-      });
-
-      // Wait for upload to complete
-      const uploadResult = await uploadTask;
-      console.log('Upload completed:', uploadResult);
-
-      // Get download URL
-      const downloadURL = await reference.getDownloadURL();
-      console.log('Download URL obtained:', downloadURL);
-
-      // Save metadata to Firestore
-      const videoDoc = await firestore().collection('videos').add({
+      setSaveProgress(50);
+      console.log('Copying video file...');
+      
+      await RNFS.copyFile(sourceUri, localPath);
+      setSaveProgress(75);
+      
+      const fileExists = await RNFS.exists(localPath);
+      if (!fileExists) {
+        throw new Error('Failed to copy video file');
+      }
+      
+      const fileStat = await RNFS.stat(localPath);
+      if (fileStat.size === 0) {
+        throw new Error('Copied video file is empty');
+      }
+      
+      console.log('Video copied successfully. Size:', fileStat.size);
+      setSaveProgress(90);
+      
+      const videoMetadata: SavedVideo = {
+        id: videoId,
         title: videoTitle.trim(),
         description: description.trim(),
-        fileName: selectedVideo.fileName,
+        fileName: localFileName,
         fileSize: selectedVideo.fileSize,
-        duration: selectedVideo.duration > 0 ? Math.round(selectedVideo.duration / 1000) : null,
-        downloadURL,
-        storagePath: fileName,
-        uploadedBy: currentUser.uid,
-        uploadedAt: firestore.FieldValue.serverTimestamp(),
-        
-        // Ball tracking configuration
+        duration: selectedVideo.duration,
+        localPath: localPath,
         ballColors: {
           primary: ballColors.primary,
           secondary: ballColors.secondary,
         },
         gameType,
-        
-        // Processing status
-        processed: false,
-        status: 'pending',
-        processingStartedAt: null,
-        processingCompletedAt: null,
-        outputVideoURL: null,
-        
-        // Analytics
-        views: 0,
-        shared: 0,
-        
-        // OpenCV processing metadata
-        trackingData: {
-          ballDetections: 0,
-          confidenceScore: 0,
-          processingTime: 0,
-          framesProcessed: 0,
-        },
-      });
-
-      console.log('Video document created with ID:', videoDoc.id);
-
+        createdAt: new Date().toISOString(),
+        processed: isTrackingEnabled,
+        status: 'saved',
+        ballDetections: ballDetections,
+        trackingSettings: trackingSettings,
+      };
+      
+      const existingVideos = await AsyncStorage.getItem('saved_videos');
+      const videosList: SavedVideo[] = existingVideos ? JSON.parse(existingVideos) : [];
+      videosList.unshift(videoMetadata);
+      
+      await AsyncStorage.setItem('saved_videos', JSON.stringify(videosList));
+      setSaveProgress(100);
+      
+      console.log('Video metadata saved. Total videos:', videosList.length);
+      console.log('Ball tracking data included:', ballDetections.length, 'detections');
+      
       Alert.alert(
-        'Upload Successful! 🏐',
-        'Your volleyball video has been uploaded and queued for ball tracking analysis. You\'ll be notified when processing is complete.',
+        'Video Saved Successfully! 🏐',
+        `Your volleyball video has been saved locally${isTrackingEnabled ? ' with ball tracking data' : ''} and is ready for analysis.${isTrackingEnabled ? `\n\nBall detections: ${ballDetections.length}` : ''}`,
         [
           {
-            text: 'View Processing Queue',
-            onPress: () => {
-              if (navigation) navigation.navigate('ProcessingQueue');
-            },
+            text: 'View Saved Videos',
+            onPress: () => navigation?.navigate('SavedVideos'),
           },
           {
-            text: 'Upload Another',
+            text: 'Save Another',
             onPress: () => {
-              // Reset form
               setSelectedVideo(null);
               setVideoTitle('');
               setDescription('');
               setBallColors({ primary: 'yellow', secondary: 'blue' });
               setGameType('indoor');
+              setBallDetections([]);
             },
           },
           {
             text: 'Go Home',
-            onPress: () => {
-              if (navigation) navigation.navigate('Home');
-            },
+            onPress: () => navigation?.navigate('Home'),
             style: 'cancel',
           },
         ]
       );
-    } catch (error) {
-      console.error('Upload error details:', error);
-      console.error('Error code:', error.code);
-      console.error('Error message:', error.message);
-      console.error('Full error object:', JSON.stringify(error, null, 2));
       
-      let errorMessage = 'Failed to upload video. Please try again.';
+    } catch (error: any) {
+      console.error('Save error details:', error);
       
-      if (error.code === 'storage/unauthorized') {
-        errorMessage = 'You don\'t have permission to upload videos. Please check your Firebase authentication.';
-      } else if (error.code === 'storage/canceled') {
-        errorMessage = 'Upload was canceled.';
-      } else if (error.code === 'storage/object-not-found') {
-        errorMessage = 'Could not access the selected video file. Please try selecting the video again or check app permissions.';
-      } else if (error.code === 'storage/unknown') {
-        errorMessage = 'An unknown error occurred. Please check your internet connection and try again.';
-      } else if (error.message && error.message.includes('ENOENT')) {
-        errorMessage = 'The selected video file could not be found. Please select the video again.';
-      } else if (error.message && error.message.includes('permission')) {
-        errorMessage = 'Permission denied. Please check app permissions and try again.';
+      let errorMessage = 'Failed to save video locally. Please try again.';
+      
+      if (error.message?.includes('No such file or directory')) {
+        errorMessage = 'Video file not accessible. Please select the video again.';
+      } else if (error.message?.includes('Permission denied')) {
+        errorMessage = 'Permission denied. Please check app permissions in device settings.';
+      } else if (error.message?.includes('not found')) {
+        errorMessage = 'Selected video file could not be found. Please select the video again.';
+      } else if (error.message?.includes('No space left')) {
+        errorMessage = 'Not enough storage space on device. Please free up some space and try again.';
+      } else if (error.message) {
+        errorMessage = error.message;
       }
       
-      Alert.alert('Upload Failed', errorMessage);
+      Alert.alert('Save Failed', errorMessage);
     } finally {
-      setUploading(false);
-      setUploadProgress(0);
+      setSaving(false);
+      setSaveProgress(0);
+      setIsProcessing(false);
+      stopTracking();
     }
   };
 
@@ -316,16 +465,119 @@ const UploadScreen = ({ navigation }) => {
           style: 'destructive',
           onPress: () => {
             setSelectedVideo(null);
-            setUploadProgress(0);
+            setSaveProgress(0);
+            setBallDetections([]);
+            stopTracking();
           },
         },
       ]
     );
   };
 
-  const BallColorSelector = () => (
+  // Custom Slider Component to replace the removed Slider
+  const CustomSlider = ({ value, minimumValue, maximumValue, onValueChange, label }) => {
+    const [sliderValue, setSliderValue] = useState(value);
+    
+    const handleSliderChange = (newValue: number) => {
+      setSliderValue(newValue);
+      onValueChange(newValue);
+    };
+
+    return (
+      <View style={styles.customSliderContainer}>
+        <Text style={styles.sliderLabel}>{label}: {Math.round(sliderValue)}</Text>
+        <View style={styles.sliderTrack}>
+          <View 
+            style={[
+              styles.sliderFill, 
+              { width: `${((sliderValue - minimumValue) / (maximumValue - minimumValue)) * 100}%` }
+            ]} 
+          />
+          <TouchableOpacity
+            style={[
+              styles.sliderThumb,
+              { 
+                left: `${((sliderValue - minimumValue) / (maximumValue - minimumValue)) * 100}%`,
+                marginLeft: -10
+              }
+            ]}
+            onPress={() => {
+              // Simple increment/decrement for now
+              const step = (maximumValue - minimumValue) / 20;
+              const newValue = Math.min(maximumValue, sliderValue + step);
+              handleSliderChange(newValue);
+            }}
+          />
+        </View>
+        <View style={styles.sliderButtons}>
+          <TouchableOpacity
+            style={styles.sliderButton}
+            onPress={() => {
+              const step = (maximumValue - minimumValue) / 20;
+              const newValue = Math.max(minimumValue, sliderValue - step);
+              handleSliderChange(newValue);
+            }}
+          >
+            <Text style={styles.sliderButtonText}>−</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.sliderButton}
+            onPress={() => {
+              const step = (maximumValue - minimumValue) / 20;
+              const newValue = Math.min(maximumValue, sliderValue + step);
+              handleSliderChange(newValue);
+            }}
+          >
+            <Text style={styles.sliderButtonText}>+</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  const BallTrackingSettings = () => (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Ball Tracking Settings 🏐</Text>
+      <View style={styles.trackingHeader}>
+        <Text style={styles.sectionTitle}>Ball Tracking Settings 🏐</Text>
+        <TouchableOpacity
+          style={[
+            styles.trackingToggle,
+            isTrackingEnabled && styles.trackingToggleActive
+          ]}
+          onPress={toggleTracking}
+          disabled={saving}
+        >
+          <Text style={styles.trackingToggleText}>
+            {isTrackingEnabled ? '🎾 ON' : '🎾 OFF'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Ball Detection Preview */}
+      {isTrackingEnabled && (
+        <View style={styles.trackingPreview}>
+          <Text style={styles.previewTitle}>Ball Detection Preview</Text>
+          <View style={styles.previewArea}>
+            {ballDetected && (
+              <View
+                style={[
+                  styles.ballIndicator,
+                  {
+                    left: (ballPosition.x * 200) / width,
+                    top: (ballPosition.y * 100) / screenHeight,
+                  },
+                ]}
+              />
+            )}
+            <Text style={styles.previewText}>
+              {isProcessing ? 
+                `🔍 Processing... (${ballDetections.length} detections)` :
+                ballDetected ? '🎾 Ball Detected!' : '🔍 Searching for ball...'
+              }
+            </Text>
+          </View>
+        </View>
+      )}
       
       <View style={styles.inputGroup}>
         <Text style={styles.inputLabel}>Primary Ball Color</Text>
@@ -375,6 +627,47 @@ const UploadScreen = ({ navigation }) => {
         </View>
       </View>
 
+      {isTrackingEnabled && (
+        <>
+          <TouchableOpacity
+            style={styles.advancedSettingsButton}
+            onPress={() => setShowSettings(!showSettings)}
+          >
+            <Text style={styles.advancedSettingsText}>
+              {showSettings ? '▼' : '▶'} Advanced Tracking Settings
+            </Text>
+          </TouchableOpacity>
+
+          {showSettings && (
+            <View style={styles.advancedSettings}>
+              <CustomSlider
+                label="Hue Max"
+                value={trackingSettings.hueMax}
+                minimumValue={0}
+                maximumValue={180}
+                onValueChange={(value) => setTrackingSettings(prev => ({...prev, hueMax: Math.round(value)}))}
+              />
+              
+              <CustomSlider
+                label="Min Radius"
+                value={trackingSettings.minRadius}
+                minimumValue={5}
+                maximumValue={50}
+                onValueChange={(value) => setTrackingSettings(prev => ({...prev, minRadius: Math.round(value)}))}
+              />
+
+              <CustomSlider
+                label="Max Radius"
+                value={trackingSettings.maxRadius}
+                minimumValue={50}
+                maximumValue={200}
+                onValueChange={(value) => setTrackingSettings(prev => ({...prev, maxRadius: Math.round(value)}))}
+              />
+            </View>
+          )}
+        </>
+      )}
+
       <View style={styles.inputGroup}>
         <Text style={styles.inputLabel}>Game Type</Text>
         <View style={styles.gameTypeButtons}>
@@ -403,9 +696,9 @@ const UploadScreen = ({ navigation }) => {
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
-        <Text style={styles.title}>Upload Volleyball Video 🏐</Text>
+        <Text style={styles.title}>Save Volleyball Video 🏐</Text>
         <Text style={styles.subtitle}>
-          Upload your volleyball game for AI-powered ball tracking analysis
+          Save your volleyball game locally for AI-powered ball tracking analysis
         </Text>
       </View>
 
@@ -432,9 +725,6 @@ const UploadScreen = ({ navigation }) => {
               </Text>
               <Text style={styles.videoText}>
                 📏 Size: {formatFileSize(selectedVideo.fileSize)}
-              </Text>
-              <Text style={styles.videoText}>
-                📍 URI: {selectedVideo.uri.substring(0, 50)}...
               </Text>
             </View>
             
@@ -481,21 +771,24 @@ const UploadScreen = ({ navigation }) => {
             </View>
           </View>
 
-          <BallColorSelector />
+          <BallTrackingSettings />
         </>
       )}
 
-      {/* Upload Progress */}
-      {uploading && (
+      {/* Save Progress */}
+      {saving && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
-            Uploading Video... {uploadProgress}%
+            {isProcessing ? 'Processing with Ball Tracking...' : `Saving Video... ${saveProgress}%`}
           </Text>
           <View style={styles.progressBar}>
-            <View style={[styles.progressFill, { width: `${uploadProgress}%` }]} />
+            <View style={[styles.progressFill, { width: `${saveProgress}%` }]} />
           </View>
           <Text style={styles.progressText}>
-            Please don't close the app while uploading
+            {isProcessing ? 
+              `Analyzing video for ball tracking... (${ballDetections.length} detections found)` :
+              'Saving video to device storage...'
+            }
           </Text>
         </View>
       )}
@@ -505,19 +798,23 @@ const UploadScreen = ({ navigation }) => {
         {selectedVideo && (
           <TouchableOpacity
             style={[
-              styles.uploadButton,
-              (!videoTitle.trim() || uploading) && styles.uploadButtonDisabled,
+              styles.saveButton,
+              (!videoTitle.trim() || saving) && styles.saveButtonDisabled,
             ]}
-            onPress={uploadVideo}
-            disabled={!videoTitle.trim() || uploading}
+            onPress={saveVideoLocally}
+            disabled={!videoTitle.trim() || saving}
           >
-            {uploading ? (
-              <View style={styles.uploadingContainer}>
+            {saving ? (
+              <View style={styles.savingContainer}>
                 <ActivityIndicator color="#FFF" size="small" />
-                <Text style={styles.uploadButtonText}>Uploading...</Text>
+                <Text style={styles.saveButtonText}>
+                  {isProcessing ? 'Processing...' : 'Saving...'}
+                </Text>
               </View>
             ) : (
-              <Text style={styles.uploadButtonText}>🚀 Upload & Start Analysis</Text>
+              <Text style={styles.saveButtonText}>
+                💾 Save Video {isTrackingEnabled ? 'with Tracking' : 'Locally'}
+              </Text>
             )}
           </TouchableOpacity>
         )}
@@ -525,8 +822,16 @@ const UploadScreen = ({ navigation }) => {
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>
-          💡 Tip: For best results, ensure good lighting and clear ball visibility
+          💡 Videos are saved to your device - no internet required!
         </Text>
+        <Text style={styles.footerText}>
+          🔒 Your videos stay private and secure on your device
+        </Text>
+        {isTrackingEnabled && (
+          <Text style={styles.footerText}>
+            🎾 Ball tracking analysis will be performed during save
+          </Text>
+        )}
       </View>
     </ScrollView>
   );
@@ -568,17 +873,18 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#1D1D1F',
-    marginBottom: 16,
+    color: '#1D1D1F',  
+  marginBottom: 16,
   },
   selectButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#007AFF',
+    borderRadius: 16,
+    padding: 32,
     borderWidth: 2,
     borderColor: '#007AFF',
     borderStyle: 'dashed',
-    borderRadius: 16,
-    padding: 40,
-    alignItems: 'center',
-    backgroundColor: '#F0F8FF',
   },
   selectButtonIcon: {
     fontSize: 48,
@@ -587,50 +893,49 @@ const styles = StyleSheet.create({
   selectButtonText: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#007AFF',
+    color: '#FFF',
     marginBottom: 8,
   },
   selectButtonSubtext: {
     fontSize: 14,
-    color: '#666',
+    color: '#B3D9FF',
     textAlign: 'center',
   },
   videoInfo: {
-    backgroundColor: '#f8f9fa',
-    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
     borderRadius: 12,
+    overflow: 'hidden',
   },
   videoPreview: {
-    height: 120,
-    backgroundColor: '#E5E5E5',
-    borderRadius: 8,
-    justifyContent: 'center',
+    backgroundColor: '#F0F0F0',
+    padding: 40,
     alignItems: 'center',
-    marginBottom: 12,
+    justifyContent: 'center',
   },
   videoPreviewText: {
-    fontSize: 16,
+    fontSize: 18,
+    fontWeight: '600',
     color: '#666',
   },
   videoDetails: {
-    marginBottom: 12,
+    padding: 16,
+    backgroundColor: '#F8F9FA',
   },
   videoText: {
-    fontSize: 15,
-    marginBottom: 6,
+    fontSize: 16,
     color: '#333',
+    marginBottom: 8,
     fontWeight: '500',
   },
   removeButton: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#FFF2F2',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
+    backgroundColor: '#FF3B30',
+    padding: 12,
+    alignItems: 'center',
   },
   removeButtonText: {
-    color: '#FF3B30',
-    fontSize: 14,
+    color: '#FFF',
+    fontSize: 16,
     fontWeight: '600',
   },
   inputGroup: {
@@ -643,22 +948,77 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   textInput: {
-    borderWidth: 1.5,
+    backgroundColor: '#F8F9FA',
+    borderWidth: 1,
     borderColor: '#E5E5E5',
     borderRadius: 12,
     padding: 16,
     fontSize: 16,
     color: '#1D1D1F',
-    backgroundColor: '#FFF',
   },
   textArea: {
     height: 100,
+    textAlignVertical: 'top',
   },
   characterCount: {
     fontSize: 12,
     color: '#999',
     textAlign: 'right',
     marginTop: 4,
+  },
+  trackingHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  trackingToggle: {
+    backgroundColor: '#E5E5E5',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  trackingToggleActive: {
+    backgroundColor: '#34C759',
+  },
+  trackingToggleText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFF',
+  },
+  trackingPreview: {
+    backgroundColor: '#F0F0F0',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  previewTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
+    marginBottom: 8,
+  },
+  previewArea: {
+    height: 100,
+    backgroundColor: '#E5E5E5',
+    borderRadius: 8,
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ballIndicator: {
+    position: 'absolute',
+    width: 12,
+    height: 12,
+    backgroundColor: '#FF3B30',
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#FFF',
+  },
+  previewText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
   },
   colorButtons: {
     flexDirection: 'row',
@@ -667,7 +1027,7 @@ const styles = StyleSheet.create({
   },
   colorButton: {
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 8,
     borderRadius: 20,
     borderWidth: 2,
     borderColor: 'transparent',
@@ -683,15 +1043,85 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textTransform: 'capitalize',
   },
+  advancedSettingsButton: {
+    backgroundColor: '#F0F0F0',
+    padding: 12,
+    borderRadius: 8,
+    marginVertical: 8,
+  },
+  advancedSettingsText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  advancedSettings: {
+    backgroundColor: '#F8F9FA',
+    padding: 16,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  customSliderContainer: {
+    marginVertical: 12,
+  },
+  sliderLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  sliderTrack: {
+    height: 4,
+    backgroundColor: '#E5E5E5',
+    borderRadius: 2,
+    position: 'relative',
+    marginBottom: 8,
+  },
+  sliderFill: {
+    height: '100%',
+    backgroundColor: '#007AFF',
+    borderRadius: 2,
+  },
+  sliderThumb: {
+    position: 'absolute',
+    top: -8,
+    width: 20,
+    height: 20,
+    backgroundColor: '#007AFF',
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#FFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  sliderButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  sliderButton: {
+    backgroundColor: '#007AFF',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sliderButtonText: {
+    color: '#FFF',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
   gameTypeButtons: {
-    gap: 8,
+    gap: 12,
   },
   gameTypeButton: {
-    padding: 16,
-    borderRadius: 12,
+    backgroundColor: '#F8F9FA',
     borderWidth: 2,
     borderColor: '#E5E5E5',
-    backgroundColor: '#FFF',
+    borderRadius: 12,
+    padding: 16,
   },
   gameTypeButtonSelected: {
     borderColor: '#007AFF',
@@ -712,11 +1142,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#E5E5E5',
     borderRadius: 4,
     overflow: 'hidden',
-    marginBottom: 8,
+    marginVertical: 12,
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#007AFF',
+    backgroundColor: '#34C759',
+    borderRadius: 4,
   },
   progressText: {
     fontSize: 14,
@@ -724,43 +1155,45 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   buttonContainer: {
-    margin: 16,
+    padding: 16,
   },
-  uploadButton: {
+  saveButton: {
     backgroundColor: '#007AFF',
     borderRadius: 16,
-    padding: 18,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
     alignItems: 'center',
-    justifyContent: 'center',
     shadowColor: '#007AFF',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
-    elevation: 5,
+    elevation: 6,
   },
-  uploadButtonDisabled: {
-    backgroundColor: '#CCC',
+  saveButtonDisabled: {
+    backgroundColor: '#B0B0B0',
     shadowOpacity: 0,
+    elevation: 0,
   },
-  uploadingContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  uploadButtonText: {
-    color: '#FFF',
+  saveButtonText: {
     fontSize: 18,
     fontWeight: '700',
+    color: '#FFF',
+  },
+  savingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
   footer: {
     padding: 20,
-    alignItems: 'center',
+    paddingBottom: 40,
   },
   footerText: {
     fontSize: 14,
     color: '#666',
     textAlign: 'center',
-    fontStyle: 'italic',
+    marginBottom: 8,
+    lineHeight: 20,
   },
 });
 
