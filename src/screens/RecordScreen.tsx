@@ -49,6 +49,7 @@ const RecordScreen = ({ navigation }) => {
   const camera = useRef(null);
   const timerRef = useRef(null);
   const trackingRef = useRef(null);
+  const recordingStartTime = useRef(null); // Add ref to track start time
 
   // Debug camera devices
   useEffect(() => {
@@ -113,13 +114,33 @@ const RecordScreen = ({ navigation }) => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
     
     return () => {
+      // Clean up timers and intervals on unmount
       if (timerRef.current) {
         clearInterval(timerRef.current);
+        timerRef.current = null;
       }
       if (trackingRef.current) {
         clearInterval(trackingRef.current);
+        trackingRef.current = null;
       }
       backHandler.remove();
+    };
+  }, [isRecording, navigation]);
+
+  // Add useEffect to handle recording state changes
+  useEffect(() => {
+    if (isRecording) {
+      startTimer();
+    } else {
+      stopTimer();
+    }
+    
+    // Cleanup function
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     };
   }, [isRecording]);
 
@@ -208,15 +229,29 @@ const RecordScreen = ({ navigation }) => {
   };
 
   const startTimer = () => {
+    // Clear any existing timer first
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    
+    // Record the start time
+    recordingStartTime.current = Date.now();
+    
+    // Start the timer
     timerRef.current = setInterval(() => {
-      setRecordingTime(prev => prev + 1);
+      const elapsedTime = Math.floor((Date.now() - recordingStartTime.current) / 1000);
+      setRecordingTime(elapsedTime);
     }, 1000);
+    
+    console.log('Timer started');
   };
 
   const stopTimer = () => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
+      console.log('Timer stopped');
     }
   };
 
@@ -263,9 +298,12 @@ const RecordScreen = ({ navigation }) => {
 
     try {
       console.log('Starting recording with ball tracking...');
-      setIsRecording(true);
+      
+      // Reset timer first
       setRecordingTime(0);
-      startTimer();
+      
+      // Set recording state - this will trigger the useEffect to start the timer
+      setIsRecording(true);
       
       if (isTrackingEnabled) {
         startTracking();
@@ -275,24 +313,22 @@ const RecordScreen = ({ navigation }) => {
         flash: flashMode === 'on' ? 'on' : 'off',
         onRecordingFinished: (video) => {
           console.log('Recording finished:', video);
-          saveRecording(video.path);
+          // Calculate final duration
+          const finalDuration = recordingStartTime.current 
+            ? Math.floor((Date.now() - recordingStartTime.current) / 1000)
+            : recordingTime;
+          saveRecording(video.path, finalDuration);
         },
         onRecordingError: (error) => {
           console.error('Recording error:', error);
           Alert.alert('Recording Error', 'Failed to record video');
-          setIsRecording(false);
-          stopTimer();
-          stopTracking();
-          setRecordingTime(0);
+          resetRecording();
         },
       });
     } catch (error) {
       console.error('Start recording error:', error);
       Alert.alert('Error', `Failed to start recording: ${error.message}`);
-      setIsRecording(false);
-      stopTimer();
-      stopTracking();
-      setRecordingTime(0);
+      resetRecording();
     }
   };
 
@@ -301,17 +337,20 @@ const RecordScreen = ({ navigation }) => {
       try {
         console.log('Stopping recording...');
         await camera.current.stopRecording();
+        
+        // The recording state will be reset in the onRecordingFinished callback
+        // or we can set it here if needed
         setIsRecording(false);
-        stopTimer();
         stopTracking();
       } catch (error) {
         console.error('Stop recording error:', error);
         Alert.alert('Error', 'Failed to stop recording');
+        resetRecording();
       }
     }
   };
 
-  const saveRecording = async (videoPath) => {
+  const saveRecording = async (videoPath, finalDuration = recordingTime) => {
     try {
       const user = auth().currentUser;
       if (!user) {
@@ -323,7 +362,7 @@ const RecordScreen = ({ navigation }) => {
       const videoData = {
         userId: user.uid,
         videoPath: videoPath,
-        duration: recordingTime,
+        duration: finalDuration, // Use the final calculated duration
         timestamp: timestamp,
         flashUsed: flashMode === 'on',
         cameraType: cameraType,
@@ -340,7 +379,7 @@ const RecordScreen = ({ navigation }) => {
       
       Alert.alert(
         'Recording Saved',
-        `Video with ball tracking recorded successfully! Duration: ${formatTime(recordingTime)}`,
+        `Video with ball tracking recorded successfully! Duration: ${formatTime(finalDuration)}`,
         [
           { text: 'Record Another', onPress: resetRecording },
           { text: 'Go Back', onPress: () => navigation && navigation.goBack() },
@@ -358,6 +397,8 @@ const RecordScreen = ({ navigation }) => {
     stopTimer();
     stopTracking();
     setBallDetected(false);
+    recordingStartTime.current = null;
+    console.log('Recording reset');
   };
 
   const toggleFlash = () => {
