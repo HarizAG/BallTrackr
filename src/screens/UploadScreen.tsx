@@ -182,83 +182,139 @@ const UploadScreen = ({ navigation }) => {
     return true;
   };
 
-  const getVideoDuration = async (uri: string): Promise<number> => {
+  // Fixed getVideoDuration function
+const getVideoDuration = async (uri: string): Promise<number> => {
+  try {
+    console.log('Getting video info for URI:', uri);
+    const videoInfo = await getVideoInfo(uri);
+    console.log('Video info result:', videoInfo);
+    
+    if (videoInfo && videoInfo.duration) {
+      // The duration from react-native-video-info is already in seconds
+      // Convert to milliseconds for consistency with your app
+      const durationMs = Math.round(videoInfo.duration * 1000);
+      console.log('Video duration (seconds):', videoInfo.duration);
+      console.log('Video duration (ms):', durationMs);
+      return durationMs;
+    }
+  } catch (error) {
+    console.warn('Failed to get video duration with react-native-video-info:', error);
+    
+    // Fallback: Try to get duration using a different approach
     try {
-      console.log('Getting video info for URI:', uri);
-      const videoInfo = await getVideoInfo(uri);
-      console.log('Video info result:', videoInfo);
-      
-      if (videoInfo && videoInfo.duration) {
-        const durationMs = videoInfo.duration * 1000;
-        console.log('Video duration (ms):', durationMs);
-        return durationMs;
-      }
-    } catch (error) {
-      console.warn('Failed to get video duration:', error);
+      console.log('Trying fallback duration method...');
+      return await getDurationFallback(uri);
+    } catch (fallbackError) {
+      console.warn('Fallback duration method also failed:', fallbackError);
     }
-    return 0;
-  };
+  }
+  return 0;
+};
 
-  const selectVideo = async () => {
-    const hasPermission = await requestStoragePermission();
-    if (!hasPermission) {
-      Alert.alert('Permission Required', 'Please grant storage permissions to select videos');
-      return;
-    }
-
-    const options = {
-      mediaType: 'video' as MediaType,
-      videoQuality: 'high' as const,
-      durationLimit: 600,
-      includeBase64: false,
-      includeExtra: true,
-      storageOptions: {
-        skipBackup: true,
-        path: 'images',
-      },
+// Fallback method using Video component (add this new function)
+const getDurationFallback = (uri: string): Promise<number> => {
+  return new Promise((resolve) => {
+    // Create a temporary video element to load metadata
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    
+    video.onloadedmetadata = () => {
+      const duration = Math.round(video.duration * 1000); // Convert to milliseconds
+      console.log('Fallback duration found:', duration);
+      resolve(duration);
     };
+    
+    video.onerror = () => {
+      console.warn('Fallback method failed to load video metadata');
+      resolve(0);
+    };
+    
+    // Set a timeout to avoid hanging
+    setTimeout(() => {
+      console.warn('Fallback duration timeout');
+      resolve(0);
+    }, 5000);
+    
+    video.src = uri;
+  });
+};
+  const selectVideo = async () => {
+  const hasPermission = await requestStoragePermission();
+  if (!hasPermission) {
+    Alert.alert('Permission Required', 'Please grant storage permissions to select videos');
+    return;
+  }
 
-    launchImageLibrary(options, async (response) => {
-      if (response.didCancel) {
-        console.log('User cancelled video selection');
-      } else if (response.errorMessage) {
-        console.log('ImagePicker Error: ', response.errorMessage);
-        Alert.alert('Error', 'Failed to select video: ' + response.errorMessage);
-      } else if (response.assets && response.assets[0]) {
-        const video = response.assets[0];
-        
-        console.log('Video selection details:', {
-          uri: video.uri,
-          duration: video.duration,
-          fileSize: video.fileSize,
-          fileName: video.fileName,
-          type: video.type
-        });
-
-        if (video.fileSize && video.fileSize > 500 * 1024 * 1024) {
-          Alert.alert('File Too Large', 'Please select a video file smaller than 500MB');
-          return;
-        }
-
-        let duration = video.duration || 0;
-        
-        if (!duration && video.uri) {
-          console.log('Duration not available from picker, trying video-info...');
-          duration = await getVideoDuration(video.uri);
-        }
-
-        setSelectedVideo({
-          uri: video.uri!,
-          fileName: video.fileName || `volleyball_${Date.now()}.mp4`,
-          fileSize: video.fileSize || 0,
-          type: video.type || 'video/mp4',
-          duration: duration,
-        });
-        
-        console.log('Final selected video duration:', duration);
-      }
-    });
+  const options = {
+    mediaType: 'video' as MediaType,
+    videoQuality: 'high' as const,
+    durationLimit: 600,
+    includeBase64: false,
+    includeExtra: true,
+    storageOptions: {
+      skipBackup: true,
+      path: 'images',
+    },
   };
+
+  launchImageLibrary(options, async (response) => {
+    if (response.didCancel) {
+      console.log('User cancelled video selection');
+    } else if (response.errorMessage) {
+      console.log('ImagePicker Error: ', response.errorMessage);
+      Alert.alert('Error', 'Failed to select video: ' + response.errorMessage);
+    } else if (response.assets && response.assets[0]) {
+      const video = response.assets[0];
+      
+      console.log('Video selection details:', {
+        uri: video.uri,
+        duration: video.duration,
+        fileSize: video.fileSize,
+        fileName: video.fileName,
+        type: video.type
+      });
+
+      if (video.fileSize && video.fileSize > 500 * 1024 * 1024) {
+        Alert.alert('File Too Large', 'Please select a video file smaller than 500MB');
+        return;
+      }
+
+      // Try multiple sources for duration
+      let duration = 0;
+      
+      // First try: from image picker response (in seconds, convert to ms)
+      if (video.duration && video.duration > 0) {
+        duration = Math.round(video.duration * 1000);
+        console.log('Duration from picker (ms):', duration);
+      }
+      
+      // Second try: use react-native-video-info if picker didn't provide duration
+      if (!duration && video.uri) {
+        console.log('Duration not available from picker, trying video-info...');
+        duration = await getVideoDuration(video.uri);
+      }
+      
+      // Third try: estimate from file size (very rough estimate)
+      if (!duration && video.fileSize) {
+        // Rough estimate: assume ~1MB per 10 seconds for typical video
+        const estimatedSeconds = Math.max(30, (video.fileSize / (1024 * 1024)) * 10);
+        duration = Math.round(estimatedSeconds * 1000);
+        console.log('Using estimated duration (ms):', duration);
+      }
+
+      setSelectedVideo({
+        uri: video.uri!,
+        fileName: video.fileName || `volleyball_${Date.now()}.mp4`,
+        fileSize: video.fileSize || 0,
+        type: video.type || 'video/mp4',
+        duration: duration,
+      });
+      
+      console.log('Final selected video duration (ms):', duration);
+      console.log('Final selected video duration (formatted):', formatDuration(duration));
+    }
+  });
+};
 
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 Bytes';
@@ -269,12 +325,22 @@ const UploadScreen = ({ navigation }) => {
   };
 
   const formatDuration = (milliseconds: number): string => {
-    if (milliseconds === 0) return 'Unknown';
-    const totalSeconds = Math.floor(milliseconds / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
+  if (!milliseconds || milliseconds === 0) return 'Unknown';
+  
+  const totalSeconds = Math.floor(milliseconds / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  
+  if (minutes === 0) {
+    return `${seconds}s`;
+  } else if (minutes < 60) {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  };
+  } else {
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return `${hours}:${remainingMinutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  }
+};
 
   const createVideosDirectory = async (): Promise<string> => {
     const videosDir = `${RNFS.DocumentDirectoryPath}/VolleyballVideos`;
