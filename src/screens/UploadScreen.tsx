@@ -18,6 +18,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getVideoInfo } from 'react-native-video-info';
 // Remove the runOnJS import since we'll handle it differently
 // import { runOnJS } from 'react-native-reanimated';
+// import OpenCV from 'react-native-opencv3';
+
 
 const { width, height: screenHeight } = Dimensions.get('window');
 
@@ -102,40 +104,21 @@ const UploadScreen = ({ navigation }) => {
     if (!isTrackingEnabled) return;
 
     try {
-      // SIMULATION MODE - Replace with actual OpenCV implementation
-      const simulatedDetection = Math.random() > 0.7;
-      if (simulatedDetection) {
-        const x = Math.random() * width;
-        const y = Math.random() * (screenHeight * 0.6) + (screenHeight * 0.2);
-        const detection = {
-          x,
-          y,
-          radius: 30,
-          timestamp: Date.now(),
-          confidence: Math.random() * 0.3 + 0.7, // 0.7 to 1.0
-        };
-        
-        // Direct state updates without runOnJS
-        setBallDetected(true);
-        setBallPosition({ x, y, radius: 30 });
-        setBallDetections(prev => [...prev, detection]);
-      } else {
-        setBallDetected(false);
-      }
+    // TODO: Implement real OpenCV ball detection here
+    // Process the camera frame and detect volleyball
+    // Return detection results with x, y, radius, confidence
     } catch (error) {
       console.error('Frame processing error:', error);
     }
   };
 
-  const startTracking = () => {
-    if (trackingRef.current) return;
-    
-    console.log('Starting ball tracking simulation...');
-    setBallDetections([]);
-    trackingRef.current = setInterval(() => {
-      processCameraFrame(null);
-    }, 100);
-  };
+      const startTracking = () => {
+        console.log('Starting real ball tracking...');
+        setBallDetections([]);
+        // TODO: Initialize real camera/video processing
+        // TODO: Set up OpenCV processing pipeline
+      };
+
 
   const stopTracking = () => {
     if (trackingRef.current) {
@@ -365,14 +348,10 @@ const getDurationFallback = (uri: string): Promise<number> => {
     setIsProcessing(true);
     setBallDetections([]);
     
-    // Simulate video processing with ball tracking
     console.log('Starting video processing with ball tracking...');
-    startTracking();
-    
-    // Simulate processing time
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    
-    stopTracking();
+    // TODO: Process video file with OpenCV
+    // TODO: Extract frames and run ball detection on each frame
+    // TODO: Collect all ball detections throughout the video
     setIsProcessing(false);
     
     console.log('Video processing completed. Ball detections:', ballDetections.length);

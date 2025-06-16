@@ -13,6 +13,7 @@ import UploadScreen from '../screens/UploadScreen';
 import RecordScreen from '../screens/RecordScreen';
 import ReportScreen from '../screens/ReportScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import VolleyballTracker from '../VolleyballTracker';
 
 const Tab = createBottomTabNavigator();
 
@@ -25,7 +26,7 @@ function MainTabs() {
       }}
     >
       <Tab.Screen name="Home" component={HomeScreen} />
-      <Tab.Screen name="Record" component={RecordScreen} />
+      <Tab.Screen name="Record" component={VolleyballTracker} />
       <Tab.Screen name="Upload" component={UploadScreen} />
       <Tab.Screen name="Report" component={ReportScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
