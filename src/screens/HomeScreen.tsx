@@ -15,6 +15,7 @@ import firestore from '@react-native-firebase/firestore';
 import auth from '@react-native-firebase/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import RNFS from 'react-native-fs';
+import VideoPlayerWithTracking from './VideoPlayerWithTracking'; // Import the new component
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -23,6 +24,10 @@ const HomeScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState('all'); // 'all', 'tracked', 'recorded', 'uploaded', 'local'
+  
+  // Video player state
+  const [selectedVideo, setSelectedVideo] = useState(null);
+  const [showVideoPlayer, setShowVideoPlayer] = useState(false);
 
   useEffect(() => {
     fetchVideos();
@@ -247,34 +252,16 @@ const HomeScreen = ({ navigation }) => {
     );
   };
 
+  // Updated playVideo function to open video player
   const playVideo = (video) => {
-    if (video.source === 'local') {
-      // For local videos, show more detailed info including ball tracking data
-      const trackingInfo = video.trackingEnabled 
-        ? `Ball Tracking: Enabled\nDetections: ${video.ballDetections?.length || 0}\nBall Colors: ${video.ballColors?.primary || 'Unknown'}${video.ballColors?.secondary && video.ballColors.secondary !== 'none' ? `, ${video.ballColors.secondary}` : ''}\nGame Type: ${video.gameType || 'Unknown'}`
-        : 'Ball Tracking: Disabled';
-      
-      Alert.alert(
-        'Local Video Info',
-        `Title: ${video.title}\nDuration: ${formatDuration(video.duration)}\nFile Size: ${formatFileSize(video.fileSize)}\nSaved: ${formatDate(video.timestamp)}\n\n${trackingInfo}${video.description ? `\n\nDescription: ${video.description}` : ''}`,
-        [
-          { text: 'OK' },
-          {
-            text: 'View Details',
-            onPress: () => {
-              // Navigate to a detailed view if you have one
-              console.log('Local video details:', video);
-            }
-          }
-        ]
-      );
-    } else {
-      // For cloud videos, show basic info
-      Alert.alert(
-        'Video Info', 
-        `Duration: ${formatDuration(video.duration)}\nTracking: ${video.trackingEnabled ? 'Enabled' : 'Disabled'}\nSource: ${video.type}`
-      );
-    }
+    console.log('Playing video:', video.title);
+    setSelectedVideo(video);
+    setShowVideoPlayer(true);
+  };
+
+  const closeVideoPlayer = () => {
+    setShowVideoPlayer(false);
+    setSelectedVideo(null);
   };
 
   const renderVideoItem = ({ item }) => (
@@ -292,6 +279,10 @@ const HomeScreen = ({ navigation }) => {
             <Text style={styles.durationBadge}>
               {formatDuration(item.duration)}
             </Text>
+            {/* Play button overlay */}
+            <View style={styles.playButtonOverlay}>
+              <Text style={styles.playButton}>▶️</Text>
+            </View>
           </View>
         </View>
 
@@ -303,87 +294,113 @@ const HomeScreen = ({ navigation }) => {
             </Text>
             <View style={styles.badges}>
               <View style={[styles.typeBadge, 
-                item.source === 'recorded' ? styles.recordedBadge : 
-                item.source === 'uploaded' ? styles.uploadedBadge :
-                item.source === 'local' ? styles.localBadge : styles.uploadedBadge
+                item.source === 'local' ? styles.localBadge : 
+                item.source === 'recorded' ? styles.recordedBadge : styles.uploadedBadge
               ]}>
-                <Text style={styles.badgeText}>{item.type}</Text>
+                <Text style={styles.typeBadgeText}>{item.type}</Text>
               </View>
               {item.trackingEnabled && (
                 <View style={styles.trackingBadge}>
-                  <Text style={styles.badgeText}>🎾 TRACKED</Text>
+                  <Text style={styles.trackingBadgeText}>🎾 Tracked</Text>
                 </View>
               )}
             </View>
           </View>
 
+          {/* Video Details */}
           <Text style={styles.videoDate}>{formatDate(item.timestamp)}</Text>
           
-          {/* Tracking Info */}
-          {item.trackingEnabled && (
-            <View style={styles.trackingInfo}>
-              <Text style={styles.trackingText}>
-                Ball tracking enabled
-                {item.ballDetections && ` • ${item.ballDetections.length} detections`}
-                {item.cameraType && ` • Camera: ${item.cameraType}`}
+          {item.description && (
+            <Text style={styles.videoDescription} numberOfLines={2}>
+              {item.description}
+            </Text>
+          )}
+
+          {/* Stats Row */}
+          <View style={styles.statsRow}>
+            <Text style={styles.statText}>
+              ⏱️ {formatDuration(item.duration)}
+            </Text>
+            {item.ballDetections && item.ballDetections.length > 0 && (
+              <Text style={styles.statText}>
+                🎾 {item.ballDetections.length} detections
               </Text>
-              {item.flashUsed && (
-                <Text style={styles.trackingText}>Flash used</Text>
-              )}
+            )}
+            {item.fileSize && (
+              <Text style={styles.statText}>
+                💾 {formatFileSize(item.fileSize)}
+              </Text>
+            )}
+          </View>
+
+          {/* Game Info */}
+          {item.gameType && (
+            <View style={styles.gameInfo}>
+              <Text style={styles.gameInfoText}>
+                🏐 {item.gameType}
+              </Text>
               {item.ballColors && (
-                <Text style={styles.trackingText}>
-                  Ball: {item.ballColors.primary}
-                  {item.ballColors.secondary && item.ballColors.secondary !== 'none' && `, ${item.ballColors.secondary}`}
+                <Text style={styles.gameInfoText}>
+                  🎨 {item.ballColors.primary}
+                  {item.ballColors.secondary && item.ballColors.secondary !== 'none' 
+                    ? `, ${item.ballColors.secondary}` : ''}
                 </Text>
               )}
             </View>
           )}
-
-          {/* Video Stats */}
-          <View style={styles.videoStats}>
-            <Text style={styles.statText}>
-              Duration: {formatDuration(item.duration)}
-            </Text>
-            {item.fileSize && (
-              <Text style={styles.statText}>
-                Size: {formatFileSize(item.fileSize)}
-              </Text>
-            )}
-            {item.ballDetections && (
-              <Text style={styles.statText}>
-                Detections: {item.ballDetections.length || 0}
-              </Text>
-            )}
-          </View>
         </View>
 
-        {/* Action Button */}
-        <TouchableOpacity
-          style={styles.actionButton}
-          onPress={() => deleteVideo(item)}
-        >
-          <Text style={styles.actionButtonText}>🗑️</Text>
-        </TouchableOpacity>
+        {/* Actions */}
+        <View style={styles.videoActions}>
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={(e) => {
+              e.stopPropagation();
+              deleteVideo(item);
+            }}
+          >
+            <Text style={styles.actionButtonText}>🗑️</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={(e) => {
+              e.stopPropagation();
+              Alert.alert(
+                'Video Details',
+                `Title: ${item.title || 'Untitled'}\n` +
+                `Duration: ${formatDuration(item.duration)}\n` +
+                `Created: ${formatDate(item.timestamp)}\n` +
+                `Source: ${item.type}\n` +
+                `Tracking: ${item.trackingEnabled ? 'Enabled' : 'Disabled'}\n` +
+                `Ball Detections: ${item.ballDetections?.length || 0}\n` +
+                `File Size: ${formatFileSize(item.fileSize)}\n` +
+                `Game Type: ${item.gameType || 'Unknown'}\n` +
+                `Ball Colors: ${item.ballColors ? 
+                  `${item.ballColors.primary}${item.ballColors.secondary && item.ballColors.secondary !== 'none' ? `, ${item.ballColors.secondary}` : ''}` 
+                  : 'Unknown'}`
+              );
+            }}
+          >
+            <Text style={styles.actionButtonText}>ℹ️</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </TouchableOpacity>
   );
 
-  const renderFilterButton = (filterType, label) => (
+  const renderFilterButton = (filterType, label, icon) => (
     <TouchableOpacity
-      style={[
-        styles.filterButton,
-        filter === filterType && styles.filterButtonActive
-      ]}
+      style={[styles.filterButton, filter === filterType && styles.activeFilterButton]}
       onPress={() => setFilter(filterType)}
     >
-      <Text style={[
-        styles.filterButtonText,
-        filter === filterType && styles.filterButtonTextActive
-      ]}>
-        {label}
+      <Text style={[styles.filterButtonText, filter === filterType && styles.activeFilterButtonText]}>
+        {icon} {label}
       </Text>
     </TouchableOpacity>
   );
+
+  const filteredVideos = getFilteredVideos();
 
   if (loading) {
     return (
@@ -394,95 +411,74 @@ const HomeScreen = ({ navigation }) => {
     );
   }
 
-  const filteredVideos = getFilteredVideos();
-
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Ball Tracking Videos</Text>
-        <Text style={styles.headerSubtitle}>
-          {filteredVideos.length} video{filteredVideos.length !== 1 ? 's' : ''} 
-          {videos.filter(v => v.source === 'local').length > 0 && 
-            ` • ${videos.filter(v => v.source === 'local').length} local`}
-        </Text>
+        <Text style={styles.headerTitle}>My Videos</Text>
+        <TouchableOpacity
+          style={styles.refreshButton}
+          onPress={onRefresh}
+          disabled={refreshing}
+        >
+          <Text style={styles.refreshButtonText}>
+            {refreshing ? '⟳' : '↻'}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* Filter Buttons */}
       <View style={styles.filterContainer}>
-        {renderFilterButton('all', 'All')}
-        {renderFilterButton('tracked', 'Tracked')}
-        {renderFilterButton('local', 'Local')}
-        {renderFilterButton('recorded', 'Recorded')}
-        {renderFilterButton('uploaded', 'Uploaded')}
+        {renderFilterButton('all', 'All', '📹')}
+        {renderFilterButton('tracked', 'Tracked', '🎾')}
+        {renderFilterButton('local', 'Local', '📱')}
+        {renderFilterButton('recorded', 'Recorded', '🎬')}
+        {renderFilterButton('uploaded', 'Uploaded', '☁️')}
       </View>
 
       {/* Videos List */}
-      <FlatList
-        data={filteredVideos}
-        renderItem={renderVideoItem}
-        keyExtractor={(item) => `${item.source}-${item.id}`}
-        contentContainerStyle={styles.listContainer}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={['#6b8e23']}
-            tintColor="#6b8e23"
-          />
-        }
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyIcon}>🎾</Text>
-            <Text style={styles.emptyTitle}>No videos found</Text>
-            <Text style={styles.emptyText}>
-              {filter === 'tracked' 
-                ? 'No videos with ball tracking found'
-                : filter === 'recorded'
-                ? 'No recorded videos found'
-                : filter === 'uploaded'
-                ? 'No uploaded videos found'
-                : filter === 'local'
-                ? 'No locally saved videos found'
-                : 'Start recording or uploading videos with ball tracking'
-              }
-            </Text>
-            <View style={styles.emptyButtonContainer}>
-              <TouchableOpacity
-                style={styles.emptyButton}
-                onPress={() => navigation?.navigate('Record')}
-              >
-                <Text style={styles.emptyButtonText}>📹 Record Video</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.emptyButton, styles.emptyButtonSecondary]}
-                onPress={() => navigation?.navigate('Upload')}
-              >
-                <Text style={[styles.emptyButtonText, styles.emptyButtonTextSecondary]}>
-                  📱 Save Local Video
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        }
-        showsVerticalScrollIndicator={false}
-      />
+      {filteredVideos.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyIcon}>
+            {filter === 'all' ? '📹' : 
+             filter === 'tracked' ? '🎾' : 
+             filter === 'local' ? '📱' : 
+             filter === 'recorded' ? '🎬' : '☁️'}
+          </Text>
+          <Text style={styles.emptyTitle}>
+            {filter === 'all' ? 'No videos found' : 
+             `No ${filter} videos found`}
+          </Text>
+          <Text style={styles.emptySubtitle}>
+            {filter === 'all' ? 
+              'Start by recording or uploading a video' : 
+              `You don't have any ${filter} videos yet`}
+          </Text>
+        </View>
+      ) : (
+        <FlatList
+          data={filteredVideos}
+          renderItem={renderVideoItem}
+          keyExtractor={(item) => `${item.source}-${item.id}`}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#6b8e23']}
+              tintColor="#6b8e23"
+            />
+          }
+          contentContainerStyle={styles.listContainer}
+          showsVerticalScrollIndicator={false}
+        />
+      )}
 
-      {/* Floating Action Buttons */}
-      <View style={styles.fabContainer}>
-        <TouchableOpacity
-          style={[styles.fab, styles.fabSecondary]}
-          onPress={() => navigation?.navigate('Upload')}
-        >
-          <Text style={styles.fabText}>📱</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.fab}
-          onPress={() => navigation?.navigate('Record')}
-        >
-          <Text style={styles.fabText}>📹</Text>
-        </TouchableOpacity>
-      </View>
+      {/* Video Player Modal */}
+      <VideoPlayerWithTracking
+        video={selectedVideo}
+        visible={showVideoPlayer}
+        onClose={closeVideoPlayer}
+      />
     </View>
   );
 };
@@ -490,76 +486,84 @@ const HomeScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f0f8f0',
+    backgroundColor: '#f5f5f5',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f0f8f0',
+    backgroundColor: '#f5f5f5',
   },
   loadingText: {
     marginTop: 10,
     fontSize: 16,
-    color: '#6b8e23',
+    color: '#666',
   },
   header: {
-    backgroundColor: '#6b8e23',
-    paddingTop: 50,
-    paddingBottom: 20,
-    paddingHorizontal: 20,
-  },
-  headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 5,
-  },
-  headerSubtitle: {
-    fontSize: 16,
-    color: '#c8e6c9',
-  },
-  filterContainer: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 15,
     backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+    marginTop: 40,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  refreshButton: {
+    backgroundColor: '#6b8e23',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  refreshButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  filterContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
   },
   filterButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    marginRight: 10,
-    borderRadius: 20,
-    backgroundColor: '#f5f5f5',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginRight: 8,
+    borderRadius: 15,
+    backgroundColor: '#f0f0f0',
   },
-  filterButtonActive: {
+  activeFilterButton: {
     backgroundColor: '#6b8e23',
   },
   filterButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 12,
     color: '#666',
+    fontWeight: '500',
   },
-  filterButtonTextActive: {
+  activeFilterButtonText: {
     color: '#fff',
   },
   listContainer: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    paddingBottom: 100, // Extra padding for FABs
+    padding: 15,
   },
   videoItem: {
     backgroundColor: '#fff',
     borderRadius: 12,
     marginBottom: 15,
-    shadowColor: '#6b8e23',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 3,
   },
   videoContent: {
     flexDirection: 'row',
@@ -569,27 +573,43 @@ const styles = StyleSheet.create({
     marginRight: 15,
   },
   thumbnail: {
-    width: 80,
+    width: 120,
     height: 80,
-    backgroundColor: '#e8f5e8',
+    backgroundColor: '#2a2a2a',
     borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
     position: 'relative',
   },
   thumbnailText: {
-    fontSize: 30,
+    fontSize: 24,
+    color: '#fff',
   },
   durationBadge: {
     position: 'absolute',
-    bottom: 4,
-    right: 4,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    bottom: 5,
+    right: 5,
+    backgroundColor: 'rgba(0,0,0,0.8)',
     color: '#fff',
     fontSize: 10,
-    paddingHorizontal: 4,
+    paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
+  },
+  playButtonOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: 8,
+  },
+  playButton: {
+    fontSize: 20,
+    color: '#fff',
   },
   videoInfo: {
     flex: 1,
@@ -603,150 +623,112 @@ const styles = StyleSheet.create({
   },
   videoTitle: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#2d5016',
+    fontWeight: 'bold',
+    color: '#333',
     flex: 1,
     marginRight: 10,
   },
   badges: {
-    flexDirection: 'row',
-    gap: 5,
+    alignItems: 'flex-end',
   },
   typeBadge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
-    borderRadius: 12,
-  },
-  recordedBadge: {
-    backgroundColor: '#6b8e23',
-  },
-  uploadedBadge: {
-    backgroundColor: '#8bc34a',
+    borderRadius: 10,
+    marginBottom: 3,
   },
   localBadge: {
-    backgroundColor: '#4285f4',
+    backgroundColor: '#4CAF50',
   },
-  trackingBadge: {
-    backgroundColor: '#4caf50',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 12,
+  recordedBadge: {
+    backgroundColor: '#2196F3',
   },
-  badgeText: {
+  uploadedBadge: {
+    backgroundColor: '#FF9800',
+  },
+  typeBadgeText: {
+    color: '#fff',
     fontSize: 10,
     fontWeight: 'bold',
+  },
+  trackingBadge: {
+    backgroundColor: '#6b8e23',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  trackingBadgeText: {
     color: '#fff',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
   videoDate: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 8,
-  },
-  trackingInfo: {
-    marginBottom: 8,
-  },
-  trackingText: {
     fontSize: 12,
-    color: '#4caf50',
-    fontWeight: '500',
+    color: '#666',
+    marginBottom: 5,
   },
-  videoStats: {
+  videoDescription: {
+    fontSize: 13,
+    color: '#555',
+    marginBottom: 8,
+    lineHeight: 18,
+  },
+  statsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     flexWrap: 'wrap',
+    marginBottom: 5,
   },
   statText: {
-    fontSize: 12,
-    color: '#999',
-    marginRight: 10,
+    fontSize: 11,
+    color: '#888',
+    marginRight: 15,
+    marginBottom: 2,
+  },
+  gameInfo: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  gameInfoText: {
+    fontSize: 11,
+    color: '#6b8e23',
+    marginRight: 15,
+    fontWeight: '500',
+  },
+  videoActions: {
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginLeft: 10,
   },
   actionButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#ffebee',
-    justifyContent: 'center',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
+    padding: 8,
+    marginVertical: 2,
   },
   actionButtonText: {
-    fontSize: 18,
+    fontSize: 16,
   },
   emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 60,
+    paddingHorizontal: 40,
   },
   emptyIcon: {
-    fontSize: 60,
+    fontSize: 48,
     marginBottom: 20,
   },
   emptyTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#2d5016',
+    color: '#333',
     marginBottom: 10,
+    textAlign: 'center',
   },
-  emptyText: {
-    fontSize: 16,
+  emptySubtitle: {
+    fontSize: 14,
     color: '#666',
     textAlign: 'center',
-    marginBottom: 30,
-    paddingHorizontal: 40,
-    lineHeight: 22,
-  },
-  emptyButtonContainer: {
-    flexDirection: 'row',
-    gap: 15,
-  },
-  emptyButton: {
-    backgroundColor: '#6b8e23',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 25,
-  },
-  emptyButtonSecondary: {
-    backgroundColor: '#fff',
-    borderWidth: 2,
-    borderColor: '#6b8e23',
-  },
-  emptyButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  emptyButtonTextSecondary: {
-    color: '#6b8e23',
-  },
-  fabContainer: {
-    position: 'absolute',
-    bottom: 30,
-    right: 30,
-    flexDirection: 'column',
-    gap: 15,
-  },
-  fab: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#6b8e23',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#6b8e23',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  fabSecondary: {
-    backgroundColor: '#4285f4',
-  },
-  fabText: {
-    fontSize: 24,
+    lineHeight: 20,
   },
 });
 
 export default HomeScreen;
-
